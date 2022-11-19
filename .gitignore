@@ -1,0 +1,14 @@
+/hw2/extra_data
+/hw3/Assignment3.zip
+/hw3/Assignment3/Assignment3_code/data
+/hw3/Assignment3/Assignment3_code/mycode/cyvlfeat
+*.jpg
+*.png
+*.zip
+*.docx
+/midterm/runs
+*.pkl
+*.pt
+*.pth
+
+
