@@ -1,6 +1,9 @@
 import cv2
 import numpy as np
 import pickle
+
+from tqdm import tqdm
+
 from utils import load_image, load_image_gray
 import sklearn.metrics.pairwise as sklearn_pairwise
 from sklearn.svm import LinearSVC
@@ -8,7 +11,7 @@ from IPython.core.debugger import set_trace
 from PIL import Image
 import scipy.spatial.distance as distance
 from cyvlfeat.sift.dsift import dsift
-from cyvlfeat.kmeans import kmeans
+from cyvlfeat.kmeans import kmeans, kmeans_quantize
 from time import time
 
 
@@ -40,9 +43,6 @@ def get_tiny_images(image_paths):
     """
     # dummy feats variable
 
-
-
-
     #############################################################################
     # TODO: YOUR CODE HERE                                                      #
     #############################################################################
@@ -50,14 +50,16 @@ def get_tiny_images(image_paths):
     feats = []
     for image_p in image_paths:
         img = load_image_gray(image_p)
-        img = cv2.resize(img,(16,16))
+        img = cv2.resize(img, (16, 16))
         img = np.array(img).flatten()
-        img = img - img.mean()
+        # print(img)
+        # break
+        img = img - img.mean()#这么标准化显然有问题
+        img = img / np.linalg.norm(img)
         feats.append(img)
     feats = np.array(feats)
     print("make feats numpy array")
     print(type(feats))
-
 
     #############################################################################
     #                             END OF YOUR CODE                              #
@@ -66,7 +68,7 @@ def get_tiny_images(image_paths):
     return feats
 
 
-def build_vocabulary(image_paths, vocab_size):
+def build_vocabulary(image_paths, vocab_size, dsift_size=15, dsift_step=25, number_of_patch = 5):
     """
     This function will sample SIFT descriptors from the training images,
     cluster them with kmeans, and then return the cluster centers.
@@ -119,23 +121,43 @@ def build_vocabulary(image_paths, vocab_size):
 
     # length of the SIFT descriptors that you are going to compute.
     dim = 128
+    d_a = []
     vocab = np.zeros((vocab_size, dim))
+    index = 0
+    for image_p in tqdm(image_paths):
+        index = index + 1
+        if index >= number_of_patch:  # 做一个跳过，不然太密集
+            index = 0
+        else:
+            continue
+        img = load_image_gray(image_p)
+        frames, descriptors = dsift(img, fast=True, step=dsift_step, size=dsift_size)
+        # print(descriptors.dtype) #uint8
+        descriptors = descriptors.tolist()
+        d_a.extend(descriptors)
+    d_a = np.array(d_a)
+    d_a = d_a.astype(np.float)
+    print(f"d_a shape : {d_a.shape}")
+    print(f"d_a dtype : {d_a.dtype}")
 
-    #############################################################################
-    # TODO: YOUR CODE HERE                                                      #
-    #############################################################################
-
-    raise NotImplementedError('`build_vocabulary` function in ' +
-                              '`student_code.py` needs to be implemented') 
-
-    #############################################################################
-    #                             END OF YOUR CODE                              #
-    #############################################################################
-
+    vocab = kmeans(data=d_a, num_centers=vocab_size)  # 代码没有被限制在这里
+    assert vocab.shape == (vocab_size, dim)
     return vocab
 
+    # dim = 128
+    # #vocab = np.zeros((vocab_size, dim))
+    # des = np.zeros((1,128))
+    # for i in tqdm(image_paths):
+    #     image = load_image_gray(i)
+    #     #descriptors N*128
+    #     frames, descriptors = dsift(image,fast=True,step=25,size=50)
+    #     des = np.append(des, descriptors , axis = 0)
+    # des = des[1:]
+    # vocab = kmeans(des, vocab_size)
+    # return vocab
 
-def get_bags_of_sifts(image_paths, vocab_filename):
+
+def get_bags_of_sifts(image_paths, vocab_filename, dsift_size=15, dsift_step=25):
     """
     This feature representation is described in the handout, lecture
     materials, and Szeliski chapter 14.
@@ -192,14 +214,29 @@ def get_bags_of_sifts(image_paths, vocab_filename):
 
     # dummy features variable
     feats = []
+    vocab_size = len(vocab)
 
     #############################################################################
     # TODO: YOUR CODE HERE                                                      #
     #############################################################################
 
-    raise NotImplementedError('`get_bags_of_sifts` function in ' +
-                              '`student_code.py` needs to be implemented')
-    
+    for image_p in tqdm(image_paths):
+        # t1 = time()
+        histogram = np.zeros(vocab_size)
+        img = load_image_gray(image_p)
+        frames, descriptors = dsift(img, fast=True, step=dsift_step, size=dsift_size)  # 这里肯定需要和你取这个值是一样的,被限制在这，结果忘记fast了
+        # print(t1 - time());t1 = time()
+        descriptors = descriptors.astype(np.float)
+        assign_ = kmeans_quantize(descriptors, vocab)
+        # print(t1 - time());t1 = time()
+        for assign_value in assign_:
+            histogram[assign_value] = histogram[assign_value] + 1
+        # print(t1 - time());t1 = time()
+        # histogram = histogram / np.max(histogram)
+        # histogram, bin_edge = np.histogram(assign_, range(vocab_size + 1))
+        histogram = histogram / np.linalg.norm(histogram)  # 标准化向量是指标准化之后向量模长是1
+        feats.append(histogram)
+    feats = np.array(feats)
 
     #############################################################################
     #                             END OF YOUR CODE                              #
@@ -209,7 +246,7 @@ def get_bags_of_sifts(image_paths, vocab_filename):
 
 
 def nearest_neighbor_classify(train_image_feats, train_labels, test_image_feats,
-                              metric='euclidean'):
+                              metric='euclidean', k=5):
     """
     This function will predict the category for every test image by finding
     the training image with most similar features. Instead of 1 nearest
@@ -243,6 +280,10 @@ def nearest_neighbor_classify(train_image_feats, train_labels, test_image_feats,
     -   test_labels: M element list, where each entry is a string indicating the
             predicted category for each testing image
     """
+
+    # - From scikit-learn: ['cityblock', 'cosine', 'euclidean', 'l1', 'l2',
+    #   'manhattan']. These metrics support sparse matrix
+    #   inputs.
     def find_the_max_label(dic_t: dict):
         max_ = 0
         re_label = None
@@ -258,7 +299,7 @@ def nearest_neighbor_classify(train_image_feats, train_labels, test_image_feats,
         for key in dic_t.keys():
             dic_t[key] = 0
         return
-    k = 5
+
     test_labels = []
     label_dic = {}
     for ele in np.unique(train_labels):
@@ -266,7 +307,7 @@ def nearest_neighbor_classify(train_image_feats, train_labels, test_image_feats,
     #############################################################################
     # TODO: YOUR CODE HERE                                                      #
     #############################################################################
-    D = sklearn_pairwise.pairwise_distances(test_image_feats, train_image_feats)
+    D = sklearn_pairwise.pairwise_distances(test_image_feats, train_image_feats, metric=metric)
     for array_t in D:
         assert len(array_t) == len(train_image_feats)
         index_t = np.argsort(array_t)
@@ -281,14 +322,15 @@ def nearest_neighbor_classify(train_image_feats, train_labels, test_image_feats,
     return test_labels
 
 
-def svm_classify(train_image_feats, train_labels, test_image_feats):
+def svm_classify(train_image_feats, train_labels, test_image_feats, penalty='l2',
+                 loss='hinge', svm_regular_parameter=1.0):
     """
     This function will train a linear SVM for every category (i.e. one vs all)
     and then use the learned linear classifiers to predict the category of
     every test image. Every test feature will be evaluated with all 15 SVMs
     and the most confident SVM will "win". Confidence, or distance from the
     margin, is W*X + B where '*' is the inner product or dot product and W and
-    B are the learned hyperplane parameters.
+    B are the learned hyperplane parameters.  todo：左边这句话非常误导
 
     Useful functions:
     -   sklearn LinearSVC
@@ -308,21 +350,66 @@ def svm_classify(train_image_feats, train_labels, test_image_feats):
     -   test_labels: M element list, where each entry is a string indicating the
             predicted category for each testing image
     """
+    ## penalty : {'l1', 'l2'}, default='l2'
+    #     Specifies the norm used in the penalization. The 'l2'
+    #     penalty is the standard used in SVC. The 'l1' leads to ``coef_``
+    #     vectors that are sparse.
+    #
+    # loss : {'hinge', 'squared_hinge'}, default='squared_hinge'
+    #     Specifies the loss function. 'hinge' is the standard SVM loss
+    #     (used e.g. by the SVC class) while 'squared_hinge' is the
+    #     square of the hinge loss. The combination of ``penalty='l1'``
+    #     and ``loss='hinge'`` is not supported.
+    # C : float, default=1.0
+    #     Regularization parameter. The strength of the regularization is
+    #     inversely proportional to C. Must be strictly positive.
     # categories
     categories = list(set(train_labels))
-
+    print(categories)
     # construct 1 vs all SVMs for each category
-    svms = {cat: LinearSVC(random_state=0, tol=1e-3, loss='hinge', C=5)
+    svms = {cat: LinearSVC(random_state=0, tol=1e-3, loss=loss, penalty=penalty, C=svm_regular_parameter)
             for cat in categories}
 
+    def find_the_max_label(dic_t: dict):
+        max_ = -99999
+        re_label = None
+        for key in dic_t.keys():
+            if dic_t[key] > max_:
+                max_ = dic_t[key]
+                re_label = key
+        if re_label is None:
+            raise "error in find_the_max_label"
+        return re_label
+
+    def assign_zero(dic_t: dict):
+        for key in dic_t.keys():
+            dic_t[key] = 0
+        return
+
     test_labels = []
+    label_dic = {}
+    for cat in categories:
+        label_dic[cat] = -1
+    for cat in categories:
+        print(f"current cat : {cat}")
+        # current_label = np.copy(train_labels)
+        current_label = np.zeros(len(train_labels), dtype=np.int)
+        # current_label[train_labels == cat] = 1 # 这代码很疑惑
+        for i in range(len(current_label)):
+            if train_labels[i] == cat:
+                current_label[i] = 1
+        # print(np.sum(current_label))
+        # current_label[current_label != 1] = 0
+        svms[cat].fit(train_image_feats, current_label)
+    for t in test_image_feats:
+        for key in svms:
+            label_dic[key] = svms[key].decision_function(t.reshape(1, -1))
+        test_labels.append(find_the_max_label(label_dic))
+        assign_zero(label_dic)
 
     #############################################################################
     # TODO: YOUR CODE HERE                                                      #
     #############################################################################
-
-    raise NotImplementedError('`svm_classify` function in ' +
-                              '`student_code.py` needs to be implemented')
 
     #############################################################################
     #                             END OF YOUR CODE                              #

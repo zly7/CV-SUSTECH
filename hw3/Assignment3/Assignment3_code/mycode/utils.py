@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+import wandb
 from sklearn.metrics import confusion_matrix
 import matplotlib.pyplot as plt
 import os.path as osp
@@ -93,3 +94,4 @@ def show_results(train_image_paths, test_image_paths, train_labels, test_labels,
     plt.tight_layout()
     plt.xticks(tick_marks, abbr_categories, rotation=45)
     plt.yticks(tick_marks, categories)
+    wandb.log({"result": [wandb.Image(plt, caption="Label")]})

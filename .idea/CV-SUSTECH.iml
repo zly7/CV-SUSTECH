@@ -7,7 +7,7 @@
       <excludeFolder url="file://$MODULE_DIR$/hw3/Assignment3/Assignment3_code/data" />
       <excludeFolder url="file://$MODULE_DIR$/midterm/runs" />
     </content>
-    <orderEntry type="inheritedJdk" />
+    <orderEntry type="jdk" jdkName="Python 3.9 (base)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PyDocumentationSettings">
